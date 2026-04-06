@@ -12,6 +12,7 @@ The system is implemented using:
 - **TCP sockets**
 - **Custom framing protocol**
 - **Multiprocessing using `fork()`**
+- **Salted password hashing and session-based authentication**
 
 ---
 
@@ -35,8 +36,17 @@ The system is implemented using:
   - `SIGCHLD` + `waitpid()` used for zombie cleanup
   - Multiple concurrent clients tested
 
-### Pending
 - **A3 – Authentication + Session Tokens**
+  - `REGISTER <user> <pass>`
+  - `LOGIN <user> <pass>`
+  - `LOGOUT`
+  - Salted password hashing using SHA-256
+  - Passwords not stored in plain text
+  - Session token generation
+  - Protected command testing (`WHOAMI`)
+  - Session expiry after inactivity
+
+### Pending
 - **A4 – Abuse Protection**
 - **A5 – Persistent Audit Logging**
 
@@ -46,20 +56,23 @@ The system is implemented using:
 
 ### Main Source Files
 - `server_1368.c` → Main TCP server
-- `client_1368.py` → Main Python client
+- `client_1368.py` → Main interactive client
 - `Makefile_1368` → Build file
 
 ### Testing Files
 - `client_test_1368.py` → Single-client testing script
 - `multi_client_test_1368.py` → Concurrent multi-client testing script
 
+### Data Files
+- `users_1368.txt` → Registered users (username + salt + hash)
+
 ---
 
 ## Build Instructions
 
-Compile the server:
+Compile manually:
 
-gcc server_1368.c -o server_1368
+gcc server_1368.c -o server_1368 -lcrypto
 
 Or using the Makefile:
 
@@ -108,6 +121,16 @@ python3 multi_client_test_1368.py
 - Parent/child process verification
 - Zombie process cleanup check
 - 10-client concurrency test
+
+### A3 Tests
+- Successful registration
+- Duplicate registration rejection
+- Failed login
+- Successful login
+- Protected command access after login
+- Logout
+- Protected command rejection after logout
+- Session timeout / inactivity expiry
 
 ---
 

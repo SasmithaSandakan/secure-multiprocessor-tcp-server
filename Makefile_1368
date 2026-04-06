@@ -1,0 +1,2 @@
+all:
+	gcc server_1368.c -o server_1368 -lcrypto
