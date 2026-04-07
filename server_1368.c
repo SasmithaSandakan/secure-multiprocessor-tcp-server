@@ -16,6 +16,7 @@
 #define BUFFER_SIZE 8192
 #define MAX_PAYLOAD 4096
 #define USERS_FILE "users_1368.txt"
+#define LOG_FILE "server_IT24101368.log"
 #define TOKEN_SIZE 64
 #define SESSION_TIMEOUT 300
 
@@ -31,11 +32,9 @@ typedef struct {
     char token[TOKEN_SIZE];
     time_t last_activity;
 
-    /* A4: rate limiting fields */
     int request_count;
     time_t window_start;
 
-    /* A4: brute-force protection fields */
     int failed_login_attempts;
     time_t lockout_until;
 } Session;
@@ -52,6 +51,67 @@ void send_response_with_token(int conn_fd, const char *status, int code, const c
     char response[512];
     snprintf(response, sizeof(response), "%s %d SID:%s %s TOKEN:%s\n", status, code, SID, message, token);
     send(conn_fd, response, strlen(response), 0);
+}
+
+/* ---------------- A5 LOGGING HELPERS ---------------- */
+
+void get_timestamp(char *buffer, size_t size) {
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    strftime(buffer, size, "%Y-%m-%d %H:%M:%S", tm_info);
+}
+
+void write_audit_log(struct sockaddr_in client_addr,
+                     Session *session,
+                     const char *command,
+                     const char *result) {
+    FILE *fp = fopen(LOG_FILE, "a");
+    if (fp == NULL) {
+        perror("log file open failed");
+        return;
+    }
+
+    char timestamp[64];
+    get_timestamp(timestamp, sizeof(timestamp));
+
+    const char *username = "-";
+    if (session != NULL && session->logged_in && session->username[0] != '\0') {
+        username = session->username;
+    }
+
+    fprintf(fp,
+            "%s | %s:%d | PID:%d | USER:%s | CMD:%s | RESULT:%s\n",
+            timestamp,
+            inet_ntoa(client_addr.sin_addr),
+            ntohs(client_addr.sin_port),
+            getpid(),
+            username,
+            command,
+            result);
+
+    fclose(fp);
+}
+
+/*
+   Masks sensitive commands before logging.
+   Example:
+   REGISTER alice secret123 -> REGISTER alice ****
+   LOGIN alice secret123    -> LOGIN alice ****
+*/
+void mask_sensitive_command(const char *input, char *output, size_t size) {
+    char cmd[32], arg1[64], arg2[64];
+
+    memset(cmd, 0, sizeof(cmd));
+    memset(arg1, 0, sizeof(arg1));
+    memset(arg2, 0, sizeof(arg2));
+
+    int count = sscanf(input, "%31s %63s %63s", cmd, arg1, arg2);
+
+    if (count == 3 && (strcmp(cmd, "LOGIN") == 0 || strcmp(cmd, "REGISTER") == 0)) {
+        snprintf(output, size, "%s %s ****", cmd, arg1);
+    } else {
+        snprintf(output, size, "%s", input);
+    }
 }
 
 /* ---------------- BASIC VALIDATION ---------------- */
@@ -203,7 +263,7 @@ void session_login(Session *session, const char *username) {
     generate_token(session->token);
     session->last_activity = time(NULL);
 
-    /* successful login resets login failure state */
+    /* reset brute-force state on success */
     session->failed_login_attempts = 0;
     session->lockout_until = 0;
 }
@@ -301,7 +361,7 @@ void handle_sigchld(int sig) {
     int saved_errno = errno;
 
     while (waitpid(-1, NULL, WNOHANG) > 0) {
-        /* reap children */
+        /* reap finished children */
     }
 
     errno = saved_errno;
@@ -309,17 +369,25 @@ void handle_sigchld(int sig) {
 
 /* ---------------- COMMAND HANDLER ---------------- */
 
-void process_command(int conn_fd, char *payload, Session *session) {
+void process_command(int conn_fd,
+                     char *payload,
+                     Session *session,
+                     struct sockaddr_in client_addr) {
     char command[32];
     char arg1[64];
     char arg2[64];
+    char safe_cmd[128];
 
     memset(command, 0, sizeof(command));
     memset(arg1, 0, sizeof(arg1));
     memset(arg2, 0, sizeof(arg2));
+    memset(safe_cmd, 0, sizeof(safe_cmd));
+
+    mask_sensitive_command(payload, safe_cmd, sizeof(safe_cmd));
 
     if (!check_rate_limit(session)) {
         send_response(conn_fd, "ERR", 429, "Rate limit exceeded");
+        write_audit_log(client_addr, session, safe_cmd, "RATE_LIMIT_EXCEEDED");
         return;
     }
 
@@ -327,22 +395,26 @@ void process_command(int conn_fd, char *payload, Session *session) {
 
     if (count <= 0) {
         send_response(conn_fd, "ERR", 400, "Empty command");
+        write_audit_log(client_addr, session, safe_cmd, "EMPTY_COMMAND");
         return;
     }
 
     if (strcmp(command, "REGISTER") == 0) {
         if (count != 3) {
             send_response(conn_fd, "ERR", 400, "Usage: REGISTER <user> <pass>");
+            write_audit_log(client_addr, session, safe_cmd, "REGISTER_BAD_USAGE");
             return;
         }
 
         if (!is_valid_username(arg1)) {
             send_response(conn_fd, "ERR", 400, "Invalid username");
+            write_audit_log(client_addr, session, safe_cmd, "REGISTER_INVALID_USERNAME");
             return;
         }
 
         if (strlen(arg2) < 4) {
             send_response(conn_fd, "ERR", 400, "Password too short");
+            write_audit_log(client_addr, session, safe_cmd, "REGISTER_PASSWORD_TOO_SHORT");
             return;
         }
 
@@ -350,10 +422,13 @@ void process_command(int conn_fd, char *payload, Session *session) {
 
         if (result == 1) {
             send_response(conn_fd, "OK", 201, "User registered");
+            write_audit_log(client_addr, session, safe_cmd, "REGISTER_SUCCESS");
         } else if (result == 0) {
             send_response(conn_fd, "ERR", 409, "User already exists");
+            write_audit_log(client_addr, session, safe_cmd, "REGISTER_DUPLICATE");
         } else {
             send_response(conn_fd, "ERR", 500, "Could not store user");
+            write_audit_log(client_addr, session, safe_cmd, "REGISTER_STORAGE_ERROR");
         }
 
         return;
@@ -362,23 +437,28 @@ void process_command(int conn_fd, char *payload, Session *session) {
     if (strcmp(command, "LOGIN") == 0) {
         if (count != 3) {
             send_response(conn_fd, "ERR", 400, "Usage: LOGIN <user> <pass>");
+            write_audit_log(client_addr, session, safe_cmd, "LOGIN_BAD_USAGE");
             return;
         }
 
         if (login_is_locked(session)) {
             send_response(conn_fd, "ERR", 423, "Login temporarily locked");
+            write_audit_log(client_addr, session, safe_cmd, "LOGIN_LOCKED");
             return;
         }
 
         if (verify_user_login(arg1, arg2)) {
             session_login(session, arg1);
             send_response_with_token(conn_fd, "OK", 200, "Login successful", session->token);
+            write_audit_log(client_addr, session, safe_cmd, "LOGIN_SUCCESS");
         } else {
             record_failed_login(session);
             if (login_is_locked(session)) {
                 send_response(conn_fd, "ERR", 423, "Too many failed logins, temporarily locked");
+                write_audit_log(client_addr, session, safe_cmd, "LOGIN_LOCKOUT_TRIGGERED");
             } else {
                 send_response(conn_fd, "ERR", 401, "Invalid username or password");
+                write_audit_log(client_addr, session, safe_cmd, "LOGIN_FAILED");
             }
         }
 
@@ -388,27 +468,32 @@ void process_command(int conn_fd, char *payload, Session *session) {
     if (strcmp(command, "WHOAMI") == 0) {
         if (!session_is_valid(session)) {
             send_response(conn_fd, "ERR", 401, "Authentication required or session expired");
+            write_audit_log(client_addr, session, safe_cmd, "WHOAMI_UNAUTHORIZED");
             return;
         }
 
         char msg[128];
         snprintf(msg, sizeof(msg), "You are logged in as %s", session->username);
         send_response(conn_fd, "OK", 200, msg);
+        write_audit_log(client_addr, session, safe_cmd, "WHOAMI_SUCCESS");
         return;
     }
 
     if (strcmp(command, "LOGOUT") == 0) {
         if (!session->logged_in) {
             send_response(conn_fd, "ERR", 400, "Not logged in");
+            write_audit_log(client_addr, session, safe_cmd, "LOGOUT_NOT_LOGGED_IN");
             return;
         }
 
+        write_audit_log(client_addr, session, safe_cmd, "LOGOUT_SUCCESS");
         session_logout(session);
         send_response(conn_fd, "OK", 200, "Logged out");
         return;
     }
 
     send_response(conn_fd, "ERR", 400, "Unknown command");
+    write_audit_log(client_addr, session, safe_cmd, "UNKNOWN_COMMAND");
 }
 
 /* ---------------- CLIENT SESSION ---------------- */
@@ -427,6 +512,8 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
            ntohs(client_addr.sin_port));
     printf("========================================\n");
 
+    write_audit_log(client_addr, &session, "CONNECT", "CLIENT_CONNECTED");
+
     while (1) {
         ssize_t bytes_received = recv(conn_fd,
                                       recv_buffer + buffered,
@@ -435,11 +522,13 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
         if (bytes_received < 0) {
             perror("recv failed");
+            write_audit_log(client_addr, &session, "RECV", "RECV_FAILED");
             break;
         }
 
         if (bytes_received == 0) {
             printf("Child PID %d: client disconnected.\n", getpid());
+            write_audit_log(client_addr, &session, "DISCONNECT", "CLIENT_DISCONNECTED");
             break;
         }
 
@@ -461,6 +550,7 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
             if (header_len >= sizeof(header)) {
                 send_response(conn_fd, "ERR", 400, "Header too long");
+                write_audit_log(client_addr, &session, "HEADER", "HEADER_TOO_LONG");
                 buffered = 0;
                 break;
             }
@@ -470,6 +560,7 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
             if (strncmp(header, "LEN:", 4) != 0) {
                 send_response(conn_fd, "ERR", 400, "Invalid header format");
+                write_audit_log(client_addr, &session, header, "INVALID_HEADER_FORMAT");
 
                 size_t consume = header_len + 1;
                 memmove(recv_buffer, recv_buffer + consume, buffered - consume);
@@ -481,6 +572,7 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
             if (!is_valid_number(len_str)) {
                 send_response(conn_fd, "ERR", 400, "Invalid length");
+                write_audit_log(client_addr, &session, header, "INVALID_LENGTH");
 
                 size_t consume = header_len + 1;
                 memmove(recv_buffer, recv_buffer + consume, buffered - consume);
@@ -492,6 +584,7 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
             if (payload_len < 0) {
                 send_response(conn_fd, "ERR", 400, "Negative length not allowed");
+                write_audit_log(client_addr, &session, header, "NEGATIVE_LENGTH");
 
                 size_t consume = header_len + 1;
                 memmove(recv_buffer, recv_buffer + consume, buffered - consume);
@@ -501,6 +594,8 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
             if (payload_len > MAX_PAYLOAD) {
                 send_response(conn_fd, "ERR", 413, "Payload too large");
+                write_audit_log(client_addr, &session, header, "PAYLOAD_TOO_LARGE");
+
                 size_t consume = header_len + 1;
                 memmove(recv_buffer, recv_buffer + consume, buffered - consume);
                 buffered -= consume;
@@ -523,7 +618,7 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
             printf("[Child %d DEBUG] Header : %s\n", getpid(), header);
             printf("[Child %d DEBUG] Payload: %s\n", getpid(), payload);
 
-            process_command(conn_fd, payload, &session);
+            process_command(conn_fd, payload, &session, client_addr);
 
             memmove(recv_buffer, recv_buffer + total_needed, buffered - total_needed);
             buffered -= total_needed;
@@ -532,6 +627,7 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
         if (buffered == sizeof(recv_buffer) - 1) {
             send_response(conn_fd, "ERR", 413, "Internal buffer full");
+            write_audit_log(client_addr, &session, "BUFFER", "INTERNAL_BUFFER_FULL");
             buffered = 0;
         }
     }
@@ -594,7 +690,7 @@ int main() {
         return 1;
     }
 
-    printf("A4 server listening on port %d (Parent PID: %d)\n", PORT, getpid());
+    printf("server listening on port %d (Parent PID: %d)\n", PORT, getpid());
 
     while (1) {
         client_len = sizeof(client_addr);

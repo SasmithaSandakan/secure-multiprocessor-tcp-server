@@ -1,107 +1,120 @@
 # Secure Multiprocessor TCP Server
 
-IE2102 Network Programming Assignment  
+IE2102 Network Programming Assignment
 Student ID: IT24101368
 
+---
+
 ## Project Overview
-This project is a custom TCP client-server application developed for the IE2102 Network Programming module.
 
-The system is implemented using:
-- **C** for the TCP server
-- **Python** for the client and testing scripts
-- **TCP sockets**
-- **Custom framing protocol**
-- **Multiprocessing using `fork()`**
-- **Salted password hashing and session-based authentication**
-- **Basic abuse protection mechanisms**
+This project implements a custom TCP client-server system using C and Python.
+It demonstrates core networking concepts including protocol design, multiprocessing, authentication, abuse protection, and audit logging.
+
+The system is designed and tested in a Linux (Kali) environment.
 
 ---
 
-## Assignment Progress
+## Technologies Used
 
-### Completed Parts
-
-#### A1 – Custom TCP Protocol
-Implemented explicit framing architecture using:
-
-LEN:<n>
-<payload>
-
-Features completed:
-- Valid framed message handling
-- Invalid header rejection
-- Invalid length rejection
-- Oversized payload rejection
-- Partial `recv()` handling
-- Multiple messages in one buffer handling
+* C (Server Implementation)
+* Python (Client & Testing Scripts)
+* TCP Sockets
+* OpenSSL (SHA-256 hashing)
+* Linux (Kali)
 
 ---
 
-#### A2 – Multiprocessing Design
-Implemented concurrent TCP server using `fork()`.
+## Assignment Implementation
 
-Features completed:
-- Parent process continues accepting new clients
-- Child process handles one client session
-- `SIGCHLD` + `waitpid()` used for zombie cleanup
-- Multiple concurrent clients tested successfully
+### A1 – Custom TCP Protocol
 
----
+Explicit framing protocol:
 
-#### A3 – Authentication + Session Tokens
-Implemented user authentication and session management.
+LEN:<n> <payload>
 
-Features completed:
-- `REGISTER <user> <pass>`
-- `LOGIN <user> <pass>`
-- `LOGOUT`
-- Salted password hashing using SHA-256
-- Passwords not stored in plain text
-- Session token generation
-- Protected command support (`WHOAMI`)
-- Session expiry after inactivity
+Features:
+
+* Valid message parsing
+* Partial `recv()` handling
+* Multiple messages in one buffer
+* Invalid header rejection
+* Invalid length rejection
+* Oversized payload rejection
 
 ---
 
-#### A4 – Abuse Protection
-Implemented basic server-side abuse protection mechanisms.
+### A2 – Multiprocessing Server
 
-Features completed:
-- Per-client rate limiting
-- Failed login brute-force lockout
-- Username validation
-- Oversized payload rejection
-- Internal receive buffer protection
+* Uses `fork()` to handle multiple clients
+* Parent process accepts connections
+* Child process handles each client
+* Zombie processes prevented using `SIGCHLD` + `waitpid()`
+* Supports concurrent client connections
 
 ---
 
-## Pending Parts
+### A3 – Authentication & Sessions
+
+Commands:
+
+* REGISTER <user> <pass>
+* LOGIN <user> <pass>
+* LOGOUT
+* WHOAMI
+
+Features:
+
+* Salted SHA-256 password hashing
+* Passwords are not stored in plaintext
+* Session token generation
+* Authentication required for protected commands
+* Session timeout after inactivity
+
+---
+
+### A4 – Abuse Protection
+
+* Per-client rate limiting
+* Brute-force login protection (temporary lockout)
+* Username validation (length + allowed characters)
+* Payload size limit (4096 bytes)
+* Internal buffer overflow protection
+
+---
 
 ### A5 – Persistent Audit Logging
-Planned features:
-- Append-only audit log file
-- Timestamped event recording
-- Logging of register/login/logout actions
-- Logging of authentication failures and abuse events
+
+Log file:
+server_IT24101368.log
+
+Each log entry contains:
+
+* Timestamp
+* Client IP and port
+* Process ID (PID)
+* Username (if logged in)
+* Command executed
+* Result (success or failure)
+
+Security improvement:
+
+* Passwords in REGISTER and LOGIN are masked in logs
 
 ---
 
-## Project Files
+## Project Structure
 
-### Main Files
-- `server_1368.c` → Main TCP server implementation
-- `client_1368.py` → Main interactive client
-- `Makefile_1368` → Build instructions
+server_1368.c                  - Main server
+client_1368.py                - Interactive client
 
-### Testing Files
-- `client_fork_test_1368.py` → A2 process/fork testing client
-- `multi_client_test_1368.py` → A2 concurrent client testing
-- `protocol_edge_test_1368.py` → A1/A4 protocol edge case tester
-- `rate_limit_test_1368.py` → A4 rate limit testing client
+client_fork_test_1368.py      - Process testing (A2)
+multi_client_test_1368.py     - Multi-client testing (A2)
+protocol_edge_test_1368.py    - Protocol testing (A1/A4)
+rate_limit_test_1368.py       - Rate limit testing (A4)
 
-### Runtime / Data Files
-- `users_1368.txt` → Registered users (username + salt + hash)
-- `server_1368` → Compiled server executable
+Makefile_1368                 - Build configuration
+README.md                     - Project documentation
+.gitignore                    - Ignored files
 
 ---
 
@@ -111,7 +124,7 @@ Compile manually:
 
 gcc server_1368.c -o server_1368 -lcrypto
 
-Or using the Makefile:
+Or using Makefile:
 
 make -f Makefile_1368
 
@@ -119,79 +132,53 @@ make -f Makefile_1368
 
 ## Run Instructions
 
-### Start the server
+Start server:
+
 ./server_1368
 
-### Run the main client
+Run client:
+
 python3 client_1368.py
 
-### Run A2 fork/process test
-python3 client_fork_test_1368.py
+---
 
-### Run A2 multi-client concurrency test
-python3 multi_client_test_1368.py
+## Example Commands
 
-### Run A1/A4 protocol edge tests
-python3 protocol_edge_test_1368.py
-
-### Run A4 rate limit test
-python3 rate_limit_test_1368.py
+REGISTER alice secret123
+LOGIN alice secret123
+WHOAMI
+LOGOUT
 
 ---
 
-## Port and Identity Details
+## Testing Scripts
 
-- **Student ID:** IT24101368
-- **Server file:** `server_1368.c`
-- **Client file:** `client_1368.py`
-- **Port:** `50368`
-- **SID used in responses:** `1013`
-
----
-
-## Testing Performed
-
-### A1 Testing
-- Normal framed message
-- Partial recv
-- Multiple messages in one buffer
-- Invalid length field
-- Oversized payload
-
-### A2 Testing
-- Parent/child process verification
-- Zombie process cleanup verification
-- Multi-client concurrency testing
-
-### A3 Testing
-- Successful registration
-- Duplicate registration rejection
-- Failed login handling
-- Successful login
-- Protected command access
-- Logout
-- Session timeout / inactivity expiry
-
-### A4 Testing
-- Invalid username rejection
-- Failed login lockout
-- Correct login rejection during lockout
-- Login after lockout expiry
-- Rate limiting
-- Payload overflow rejection
+client_fork_test_1368.py → Fork/process behavior testing
+multi_client_test_1368.py → Concurrent clients testing
+protocol_edge_test_1368.py → Protocol edge cases
+rate_limit_test_1368.py → Rate limiting verification
 
 ---
 
-## Security Notes
-This project is an academic implementation for learning TCP protocol design, concurrency, authentication, and server-side abuse protection.
+## Security Considerations
 
-The password storage uses:
-- per-user random salt
-- SHA-256 hashing
-
-For real-world production systems, stronger password hashing algorithms such as bcrypt, scrypt, Argon2, or PBKDF2 would be more appropriate.
+* Passwords stored as: username:salt:hash
+* No plaintext password storage
+* Sensitive data masked in logs
+* Basic protection against brute-force attacks and flooding
 
 ---
 
 ## Notes
-This repository is being developed step by step according to the assignment specification, Linux-based testing, and viva preparation requirements.
+
+* Developed according to assignment requirements
+* Tested in Linux environment
+* Focused on correctness, robustness, and security awareness
+
+---
+
+## Author
+
+Student ID: IT24101368
+Module: IE2102 – Network Programming
+
