@@ -17,13 +17,27 @@
 #define MAX_PAYLOAD 4096
 #define USERS_FILE "users_1368.txt"
 #define TOKEN_SIZE 64
-#define SESSION_TIMEOUT 300   /* 5 minutes */
+#define SESSION_TIMEOUT 300
+
+/* A4 protection settings */
+#define RATE_LIMIT_MAX_REQUESTS 5
+#define RATE_LIMIT_WINDOW 10
+#define LOGIN_FAIL_LIMIT 3
+#define LOGIN_LOCKOUT_SECONDS 30
 
 typedef struct {
     int logged_in;
     char username[64];
     char token[TOKEN_SIZE];
     time_t last_activity;
+
+    /* A4: rate limiting fields */
+    int request_count;
+    time_t window_start;
+
+    /* A4: brute-force protection fields */
+    int failed_login_attempts;
+    time_t lockout_until;
 } Session;
 
 /* ---------------- RESPONSE HELPERS ---------------- */
@@ -110,7 +124,7 @@ void generate_token(char *token_out) {
 int user_exists(const char *username) {
     FILE *fp = fopen(USERS_FILE, "r");
     if (fp == NULL) {
-        return 0;  /* file may not exist yet */
+        return 0;
     }
 
     char line[512];
@@ -188,6 +202,10 @@ void session_login(Session *session, const char *username) {
     session->username[sizeof(session->username) - 1] = '\0';
     generate_token(session->token);
     session->last_activity = time(NULL);
+
+    /* successful login resets login failure state */
+    session->failed_login_attempts = 0;
+    session->lockout_until = 0;
 }
 
 void session_logout(Session *session) {
@@ -226,6 +244,56 @@ int session_is_valid(Session *session) {
     return 1;
 }
 
+/* ---------------- A4 PROTECTION HELPERS ---------------- */
+
+int check_rate_limit(Session *session) {
+    time_t now = time(NULL);
+
+    if (session->window_start == 0) {
+        session->window_start = now;
+        session->request_count = 1;
+        return 1;
+    }
+
+    if (difftime(now, session->window_start) > RATE_LIMIT_WINDOW) {
+        session->window_start = now;
+        session->request_count = 1;
+        return 1;
+    }
+
+    session->request_count++;
+
+    if (session->request_count > RATE_LIMIT_MAX_REQUESTS) {
+        return 0;
+    }
+
+    return 1;
+}
+
+int login_is_locked(Session *session) {
+    time_t now = time(NULL);
+
+    if (session->lockout_until == 0) {
+        return 0;
+    }
+
+    if (now >= session->lockout_until) {
+        session->lockout_until = 0;
+        session->failed_login_attempts = 0;
+        return 0;
+    }
+
+    return 1;
+}
+
+void record_failed_login(Session *session) {
+    session->failed_login_attempts++;
+
+    if (session->failed_login_attempts >= LOGIN_FAIL_LIMIT) {
+        session->lockout_until = time(NULL) + LOGIN_LOCKOUT_SECONDS;
+    }
+}
+
 /* ---------------- SIGNAL HANDLER ---------------- */
 
 void handle_sigchld(int sig) {
@@ -249,6 +317,11 @@ void process_command(int conn_fd, char *payload, Session *session) {
     memset(command, 0, sizeof(command));
     memset(arg1, 0, sizeof(arg1));
     memset(arg2, 0, sizeof(arg2));
+
+    if (!check_rate_limit(session)) {
+        send_response(conn_fd, "ERR", 429, "Rate limit exceeded");
+        return;
+    }
 
     int count = sscanf(payload, "%31s %63s %63s", command, arg1, arg2);
 
@@ -292,11 +365,21 @@ void process_command(int conn_fd, char *payload, Session *session) {
             return;
         }
 
+        if (login_is_locked(session)) {
+            send_response(conn_fd, "ERR", 423, "Login temporarily locked");
+            return;
+        }
+
         if (verify_user_login(arg1, arg2)) {
             session_login(session, arg1);
             send_response_with_token(conn_fd, "OK", 200, "Login successful", session->token);
         } else {
-            send_response(conn_fd, "ERR", 401, "Invalid username or password");
+            record_failed_login(session);
+            if (login_is_locked(session)) {
+                send_response(conn_fd, "ERR", 423, "Too many failed logins, temporarily locked");
+            } else {
+                send_response(conn_fd, "ERR", 401, "Invalid username or password");
+            }
         }
 
         return;
@@ -418,7 +501,6 @@ void handle_client_session(int conn_fd, struct sockaddr_in client_addr) {
 
             if (payload_len > MAX_PAYLOAD) {
                 send_response(conn_fd, "ERR", 413, "Payload too large");
-
                 size_t consume = header_len + 1;
                 memmove(recv_buffer, recv_buffer + consume, buffered - consume);
                 buffered -= consume;
@@ -512,7 +594,7 @@ int main() {
         return 1;
     }
 
-    printf("A3 server listening on port %d (Parent PID: %d)\n", PORT, getpid());
+    printf("A4 server listening on port %d (Parent PID: %d)\n", PORT, getpid());
 
     while (1) {
         client_len = sizeof(client_addr);
