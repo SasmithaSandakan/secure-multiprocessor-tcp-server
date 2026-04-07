@@ -13,58 +13,95 @@ The system is implemented using:
 - **Custom framing protocol**
 - **Multiprocessing using `fork()`**
 - **Salted password hashing and session-based authentication**
+- **Basic abuse protection mechanisms**
 
 ---
 
-## Current Progress
+## Assignment Progress
 
-### Completed
-- **A1 – Custom TCP Protocol**
-  - Explicit framing using:
-    LEN:<n>
-    <payload>
-  - Valid frame handling
-  - Invalid header rejection
-  - Invalid length rejection
-  - Oversized payload rejection
-  - Partial `recv()` handling
-  - Multiple messages in one buffer handling
+### Completed Parts
 
-- **A2 – Multiprocessing Design Using `fork()`**
-  - Parent process keeps accepting connections
-  - Child process handles one client session
-  - `SIGCHLD` + `waitpid()` used for zombie cleanup
-  - Multiple concurrent clients tested
+#### A1 – Custom TCP Protocol
+Implemented explicit framing architecture using:
 
-- **A3 – Authentication + Session Tokens**
-  - `REGISTER <user> <pass>`
-  - `LOGIN <user> <pass>`
-  - `LOGOUT`
-  - Salted password hashing using SHA-256
-  - Passwords not stored in plain text
-  - Session token generation
-  - Protected command testing (`WHOAMI`)
-  - Session expiry after inactivity
+LEN:<n>
+<payload>
 
-### Pending
-- **A4 – Abuse Protection**
-- **A5 – Persistent Audit Logging**
+Features completed:
+- Valid framed message handling
+- Invalid header rejection
+- Invalid length rejection
+- Oversized payload rejection
+- Partial `recv()` handling
+- Multiple messages in one buffer handling
 
 ---
 
-## Files
+#### A2 – Multiprocessing Design
+Implemented concurrent TCP server using `fork()`.
 
-### Main Source Files
-- `server_1368.c` → Main TCP server
+Features completed:
+- Parent process continues accepting new clients
+- Child process handles one client session
+- `SIGCHLD` + `waitpid()` used for zombie cleanup
+- Multiple concurrent clients tested successfully
+
+---
+
+#### A3 – Authentication + Session Tokens
+Implemented user authentication and session management.
+
+Features completed:
+- `REGISTER <user> <pass>`
+- `LOGIN <user> <pass>`
+- `LOGOUT`
+- Salted password hashing using SHA-256
+- Passwords not stored in plain text
+- Session token generation
+- Protected command support (`WHOAMI`)
+- Session expiry after inactivity
+
+---
+
+#### A4 – Abuse Protection
+Implemented basic server-side abuse protection mechanisms.
+
+Features completed:
+- Per-client rate limiting
+- Failed login brute-force lockout
+- Username validation
+- Oversized payload rejection
+- Internal receive buffer protection
+
+---
+
+## Pending Parts
+
+### A5 – Persistent Audit Logging
+Planned features:
+- Append-only audit log file
+- Timestamped event recording
+- Logging of register/login/logout actions
+- Logging of authentication failures and abuse events
+
+---
+
+## Project Files
+
+### Main Files
+- `server_1368.c` → Main TCP server implementation
 - `client_1368.py` → Main interactive client
-- `Makefile_1368` → Build file
+- `Makefile_1368` → Build instructions
 
 ### Testing Files
-- `client_test_1368.py` → Single-client testing script
-- `multi_client_test_1368.py` → Concurrent multi-client testing script
+- `client_fork_test_1368.py` → A2 process/fork testing client
+- `multi_client_test_1368.py` → A2 concurrent client testing
+- `protocol_edge_test_1368.py` → A1/A4 protocol edge case tester
+- `rate_limit_test_1368.py` → A4 rate limit testing client
 
-### Data Files
+### Runtime / Data Files
 - `users_1368.txt` → Registered users (username + salt + hash)
+- `server_1368` → Compiled server executable
 
 ---
 
@@ -88,11 +125,17 @@ make -f Makefile_1368
 ### Run the main client
 python3 client_1368.py
 
-### Run single-client test
-python3 client_test_1368.py
+### Run A2 fork/process test
+python3 client_fork_test_1368.py
 
-### Run multi-client concurrency test
+### Run A2 multi-client concurrency test
 python3 multi_client_test_1368.py
+
+### Run A1/A4 protocol edge tests
+python3 protocol_edge_test_1368.py
+
+### Run A4 rate limit test
+python3 rate_limit_test_1368.py
 
 ---
 
@@ -102,37 +145,53 @@ python3 multi_client_test_1368.py
 - **Server file:** `server_1368.c`
 - **Client file:** `client_1368.py`
 - **Port:** `50368`
-- **SID:** `1013`
+- **SID used in responses:** `1013`
 
 ---
 
-## Testing Done So Far
+## Testing Performed
 
-### A1 Tests
+### A1 Testing
 - Normal framed message
-- Invalid header format
+- Partial recv
+- Multiple messages in one buffer
 - Invalid length field
 - Oversized payload
-- Partial `recv()`
-- Multiple messages in one buffer
 
-### A2 Tests
-- Multiple client connections
+### A2 Testing
 - Parent/child process verification
-- Zombie process cleanup check
-- 10-client concurrency test
+- Zombie process cleanup verification
+- Multi-client concurrency testing
 
-### A3 Tests
+### A3 Testing
 - Successful registration
 - Duplicate registration rejection
-- Failed login
+- Failed login handling
 - Successful login
-- Protected command access after login
+- Protected command access
 - Logout
-- Protected command rejection after logout
 - Session timeout / inactivity expiry
+
+### A4 Testing
+- Invalid username rejection
+- Failed login lockout
+- Correct login rejection during lockout
+- Login after lockout expiry
+- Rate limiting
+- Payload overflow rejection
+
+---
+
+## Security Notes
+This project is an academic implementation for learning TCP protocol design, concurrency, authentication, and server-side abuse protection.
+
+The password storage uses:
+- per-user random salt
+- SHA-256 hashing
+
+For real-world production systems, stronger password hashing algorithms such as bcrypt, scrypt, Argon2, or PBKDF2 would be more appropriate.
 
 ---
 
 ## Notes
-This repository is being developed step by step according to the assignment specification and testing requirements.
+This repository is being developed step by step according to the assignment specification, Linux-based testing, and viva preparation requirements.
